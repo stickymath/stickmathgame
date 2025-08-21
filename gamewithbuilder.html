@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sticky Math</title>
+<style>
+  :root {
+  --bg: #101010;
+  --card: #181818;
+  --ink: #f5f5f5;
+  --muted: #b0b0b0;
+  --accent: #3b82f6;   /* bright blue */
+  --good: #22c55e;     /* green */
+  --bad: #ef4444;      /* red */
+  --stick: #facc15;    /* bright yellow ON */
+  --stick-off: #3f3f46;/* dark gray OFF */
+  --focus: #ec4899;    /* pink for hover/focus */
+}
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+    color: var(--ink);
+    background: radial-gradient(1200px 800px at 50% -10%, #1c1d26 0, var(--bg) 60%);
+    display: grid;
+    min-height: 100svh;
+    place-items: center;
+  }
+  .wrap {
+    width: min(920px, 96vw);
+    padding: 20px 16px 28px;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: 0.4px; }
+  .sub { font-size: 13px; color: var(--muted); }
+  .card {
+    background: linear-gradient(180deg, #1b1c22, var(--card));
+    border: 1px solid #242632;
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(11, 1fr);
+    gap: clamp(10px, 1.8vw, 16px);
+    align-items: center;
+    justify-items: center;
+    padding: clamp(12px, 2vw, 18px);
+  }
+  /* Each token is an SVG with sticks (rounded rects) */
+  .token {
+    width: clamp(56px, 9.2vw, 82px);
+    height: clamp(96px, 15vw, 130px);
+    display: grid;
+    place-items: center;
+  }
+  .ops { width: clamp(40px, 6.8vw, 60px); }
+  svg { width: 100%; height: 100%; overflow: visible; }
+  .stick {
+    fill: var(--stick-off);
+    transition: transform color: #3b82f6 .12s ease, fill .12s ease, opacity .12s ease;
+    rx: 6; ry: 6;
+  }
+  .stick.on { fill: var(--stick); filter: drop-shadow(0 1px 1px rgba(255,255,255,.08)); }
+  .stick.pick { outline: 2px solid transparent; transform: scale(1.04); }
+  .stick.hover { stroke: var(--focus); stroke-width: 2; }
+  .legend {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; color: var(--muted); font-size: 13px;
+  }
+  .controls { display:flex; gap:8px; align-items:center; justify-content: space-between; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    background: #232532; color: var(--ink); border: 1px solid #2e3140;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background:#2a2d3e; }
+  .primary { background: #2b3850; border-color: #354466; }
+  .primary:hover { background:#314063; }
+  .ok { color: #0b381a; background: #8ef0b0; border-color: #6be796; }
+  .bad { color: #3c0a0a; background: #fbb4b4; border-color: #f38c8c; }
+  .msg { font-size: 14px; padding: 8px 10px; border-radius: 10px; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  .footer { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .hidden { display:none !important; }
+  @media (max-width:560px) {
+    h1 { font-size: 20px; }
+    .sub { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Sticky Math</h1>
+        <div class="sub">Move exactly one stick to make the equation true.</div>
+      </div>
+      <div class="sub" id="puzzleLabel"></div>
+    </header>
+
+    <div class="card">
+      <div id="board" class="board" role="group" aria-label="Matchstick equation board"></div>
+      <div class="controls">
+        <div class="row">
+          <div id="status" class="msg" aria-live="polite"></div>
+        </div>
+        <div class="row">
+          <button id="resetBtn" type="button">Reset</button>
+          <button id="hintBtn" type="button">Hint</button>
+          <button id="shareBtn" class="primary" type="button">Share</button>
+        </div>
+      </div>
+      <div class="legend">
+        Tip: Tap a lit stick to pick it up, then tap an empty slot to place it. You only get one move!
+      </div>
+    </div>
+
+    <div class="footer">
+      © <span id="year"></span> Sticky Math. Built as a demo—plug in your daily puzzles below in <span class="mono">PUZZLES[]</span>.
+    </div>
+  </div>
+
+<script>
+/* ---------------------- PUZZLE DATA (you edit this) ---------------------- */
+/*
+ Each puzzle declares:
+ - id: a short code (e.g. date or puzzle number)
+ - layout: string like "5+3=9" using digits 0–9 and + - =
+ - move: { from: [tokenIndex, segmentKey], to: [tokenIndex, segmentKey] }
+   where tokenIndex is 0..N-1 across the layout, and segmentKey is:
+     For digits: one of 'a','b','c','d','e','f','g' (seven-seg)
+     For '+': 'h','v' (horizontal, vertical)
+     For '-': 'h' (horizontal)
+     For '=': 't','b' (top, bottom)
+ Example: move a vertical from the plus to make a minus, or move a top segment of 9 to another digit, etc.
+*/
+
+const PUZZLES = [
+  {
+    id: "001",
+    layout: "5+3=9",
+    // Example solution: move one stick from the plus to make it a minus → 5-3=2
+    // From plus 'v' to digit '2' 'g' (middle) is a common style, but here we’ll keep it simple:
+    // move vertical from '+' to turn 9 into 8 (add 'e'), yielding 5+3=8 (still false!) — so instead:
+    // We'll set the canonical solution: move one stick from the 9 to make it 8 -> 5+3=8 is TRUE!
+    // So FROM token 4 (the '9'), segment 'g' (middle) moves to token 1 (the '+'), segment 'v' to turn + into =? That’s messy.
+    // Let's pick a clean classic: 5 + 3 = 9  → move one stick from the 9 (turn 9→8) so 5 + 3 = 8 (TRUE).
+    // Implementation detail: we "remove" 9's segment 'g' (middle) and "add" 9's missing 'e' (bottom-left) to form 8.
+    // To ensure a single move, we model "from 9.g to 9.e".
+    move: { from: [4, 'g'], to: [4, 'e'] }
+  },
+  {
+    id: "002",
+    layout: "6-4=9",
+    // Move one stick from the 9 to the 6 to make 8-4=4 (TRUE): from token 4 (9).g -> token 0 (6).e (6→8).
+    move: { from: [4, 'g'], to: [0, 'e'] }
+  },
+  {
+    id: "003",
+    layout: "9-5=3",
+    // Move one stick within the 9 to make 3: 9 (remove 'f') to 3 (add 'e' off? Not great).
+    // Simpler: move one stick from 9 to '=' to make '≠' is not allowed. We'll do classic: 9-5=3 → move one from 9 to make 8 → 8-5=3 (TRUE).
+    move: { from: [0, 'g'], to: [0, 'e'] } // token 0 is '9'
+  }
+];
+// Choose which puzzle to show (e.g., today’s). For demo, take first:
+let CURRENT_INDEX = 0;
+
+/* ---------------------- RENDERING / SHAPES ---------------------- */
+
+const DIGIT_SEGMENTS = {
+  // Seven-seg encoding: a b c d e f g (true=on)
+  '0': ['a','b','c','d','e','f'],
+  '1': ['b','c'],
+  '2': ['a','b','g','e','d'],
+  '3': ['a','b','g','c','d'],
+  '4': ['f','g','b','c'],
+  '5': ['a','f','g','c','d'],
+  '6': ['a','f','g','e','c','d'],
+  '7': ['a','b','c'],
+  '8': ['a','b','c','d','e','f','g'],
+  '9': ['a','b','c','d','f','g'],
+};
+
+const TOKEN_KINDS = {
+  DIGIT: 'digit', PLUS: 'plus', MINUS: 'minus', EQUALS: 'equals'
+};
+
+function kindForChar(ch){
+  if ('0123456789'.includes(ch)) return TOKEN_KINDS.DIGIT;
+  if (ch === '+') return TOKEN_KINDS.PLUS;
+  if (ch === '-') return TOKEN_KINDS.MINUS;
+  if (ch === '=') return TOKEN_KINDS.EQUALS;
+  throw new Error('Unsupported char: ' + ch);
+}
+
+// Build per-token segment definitions (positions in an SVG viewBox 100x160)
+function buildTokenSegments(kind, ch){
+  const segs = [];
+  // Common sizes
+  const W = 100, H = 160, t = 12, pad = 10;
+  const wH = W - 2*pad, hV = (H - 3*pad)/2;
+  const cx = W/2, cy = H/2;
+
+  if (kind === TOKEN_KINDS.DIGIT) {
+    // Seven-seg placement:
+    // a (top), b (upper-right), c (lower-right), d (bottom), e (lower-left), f (upper-left), g (middle)
+    const a = { x: pad, y: pad, w: wH, h: t };
+    const d = { x: pad, y: H - pad - t, w: wH, h: t };
+    const g = { x: pad, y: (H - t)/2, w: wH, h: t };
+
+    const b = { x: W - pad - t, y: pad + 2, w: t, h: hV - 2 };
+    const c = { x: W - pad - t, y: cy + 2, w: t, h: hV - 2 };
+
+    const f = { x: pad, y: pad + 2, w: t, h: hV - 2 };
+    const e = { x: pad, y: cy + 2, w: t, h: hV - 2 };
+
+    segs.push(['a', a], ['b', b], ['c', c], ['d', d], ['e', e], ['f', f], ['g', g]);
+    const on = new Set(DIGIT_SEGMENTS[ch] || []);
+    return segs.map(([key, rect]) => ({ key, rect, on: on.has(key) }));
+  }
+  if (kind === TOKEN_KINDS.PLUS) {
+    const h = { x: pad, y: cy - t/2, w: W - 2*pad, h: t };
+    const v = { x: cx - t/2, y: pad + 8, w: t, h: H - 2*pad - 16 };
+    return [
+      { key:'h', rect: h, on: true },
+      { key:'v', rect: v, on: true }
+    ];
+  }
+  if (kind === TOKEN_KINDS.MINUS) {
+    const h = { x: pad, y: cy - t/2, w: W - 2*pad, h: t };
+    return [{ key:'h', rect: h, on: true }];
+  }
+  if (kind === TOKEN_KINDS.EQUALS) {
+    const h1 = { x: pad, y: cy - 22, w: W - 2*pad, h: t };
+    const h2 = { x: pad, y: cy + 22 - t, w: W - 2*pad, h: t };
+    return [
+      { key:'t', rect: h1, on: true },
+      { key:'b', rect: h2, on: true }
+    ];
+  }
+  return [];
+}
+
+function charToToken(ch){
+  const kind = kindForChar(ch);
+  return { ch, kind, segs: buildTokenSegments(kind, ch) };
+}
+
+/* ---------------------- GAME STATE ---------------------- */
+
+let state = {
+  puzzle: PUZZLES[CURRENT_INDEX],
+  tokens: [],           // populated from puzzle.layout
+  picked: null,         // { tokenIdx, segKey }
+  moved: false,         // whether a move has been made
+  startSnapshot: null,  // to allow reset
+};
+
+function initPuzzle(puz){
+  state.puzzle = puz;
+  state.tokens = puz.layout.split('').map(charToToken);
+  state.picked = null;
+  state.moved = false;
+  state.startSnapshot = snapshot();
+  render();
+  setStatus("Pick up one lit stick, then place it to make the equation true.");
+  document.getElementById('puzzleLabel').textContent = `Puzzle #${puz.id}`;
+}
+
+function snapshot(){
+  // Returns { [tokenIdx]: Set(keys that are on) }
+  const snap = {};
+  state.tokens.forEach((t, i) => {
+    snap[i] = new Set(t.segs.filter(s=>s.on).map(s=>s.key));
+  });
+  return snap;
+}
+
+function restoreSnapshot(snap){
+  state.tokens.forEach((t, i) => {
+    const on = snap[i] || new Set();
+    t.segs.forEach(s => s.on = on.has(s.key));
+  });
+}
+
+function sameLocation(a,b){ return a[0]===b[0] && a[1]===b[1]; }
+
+function setStatus(msg, tone){
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = "msg " + (tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : '');
+}
+
+function checkSolved(){
+  // Solved if the single move exactly matches the configured move
+  // AND the new configuration equals (start - from + to)
+  const { move } = state.puzzle;
+  if (!state.moved) return false;
+  // Verify board equals expected after that move:
+  const expected = snapshotAfterMove(state.startSnapshot, move);
+  const actual = snapshot();
+  return snapshotsEqual(expected, actual);
+}
+
+function snapshotsEqual(a,b){
+  const keysA = Object.keys(a), keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA){
+    const aSet = a[k], bSet = b[k];
+    if (aSet.size !== bSet.size) return false;
+    for (const v of aSet){ if (!bSet.has(v)) return false; }
+  }
+  return true;
+}
+
+function snapshotAfterMove(start, move){
+  const clone = {};
+  for (const k in start) clone[k] = new Set([...start[k]]);
+  const [fromIdx, fromKey] = move.from;
+  const [toIdx, toKey]   = move.to;
+  clone[fromIdx].delete(fromKey);
+  clone[toIdx].add(toKey);
+  return clone;
+}
+
+/* ---------------------- RENDER / INTERACTION ---------------------- */
+
+function render(){
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+
+  state.tokens.forEach((tok, idx) => {
+    const tokenDiv = document.createElement('div');
+    tokenDiv.className = 'token' + (tok.kind !== TOKEN_KINDS.DIGIT ? ' ops' : '');
+    tokenDiv.setAttribute('data-token', String(idx));
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 100 160');
+
+    tok.segs.forEach(seg => {
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      r.setAttribute('x', seg.rect.x);
+      r.setAttribute('y', seg.rect.y);
+      r.setAttribute('width', seg.rect.w);
+      r.setAttribute('height', seg.rect.h);
+      r.setAttribute('rx', 6);
+      r.setAttribute('ry', 6);
+      r.classList.add('stick');
+      if (seg.on) r.classList.add('on');
+
+      r.dataset.token = String(idx);
+      r.dataset.key = seg.key;
+
+      r.addEventListener('pointerenter', () => {
+        if (state.picked && !seg.on) r.classList.add('hover');
+      });
+      r.addEventListener('pointerleave', () => r.classList.remove('hover'));
+      r.addEventListener('click', () => handleClick(idx, seg.key));
+
+      svg.appendChild(r);
+    });
+
+    tokenDiv.appendChild(svg);
+    board.appendChild(tokenDiv);
+
+    // Add spacing columns between tokens to make 11 cols total, but grid gap already handles.
+  });
+}
+
+function handleClick(tokenIdx, segKey){
+  const tok = state.tokens[tokenIdx];
+  const seg = tok.segs.find(s => s.key === segKey);
+  if (!seg) return;
+
+  // If nothing picked yet:
+  if (!state.picked){
+    if (!seg.on){
+      setStatus("Pick up a lit stick first.");
+      return;
+    }
+    state.picked = { tokenIdx, segKey };
+    setStickPicked(tokenIdx, segKey, true);
+    setStatus("Now tap an empty slot to place the stick.");
+    return;
+  }
+
+  // If clicking the same lit stick again -> put it down
+  if (state.picked.tokenIdx === tokenIdx && state.picked.segKey === segKey){
+    setStickPicked(tokenIdx, segKey, false);
+    state.picked = null;
+    setStatus("Pick up one lit stick, then place it to make the equation true.");
+    return;
+  }
+
+  // Trying to place:
+  if (seg.on){
+    setStatus("That slot already has a stick. Choose an empty slot.", 'bad');
+    return;
+  }
+
+  // Execute the move (toggle off picked, toggle on target)
+  const from = state.picked;
+  const fromSeg = state.tokens[from.tokenIdx].segs.find(s => s.key === from.segKey);
+  fromSeg.on = false;
+  seg.on = true;
+  setStickPicked(from.tokenIdx, from.segKey, false);
+  state.picked = null;
+  state.moved = true;
+  render(); // re-render for clean classes
+
+  if (checkSolved()){
+    setStatus("Correct! ✅ You solved Sticky Math in one move.", 'ok');
+  } else {
+    setStatus("That’s a legal move, but the equation isn’t correct. Try Reset or Hint.", 'bad');
+  }
+}
+
+function setStickPicked(tokenIdx, segKey, picked){
+  const board = document.getElementById('board');
+  const rects = board.querySelectorAll(`.stick[data-token="${tokenIdx}"][data-key="${segKey}"]`);
+  rects.forEach(r => r.classList.toggle('pick', picked));
+}
+
+/* ---------------------- CONTROLS ---------------------- */
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  restoreSnapshot(state.startSnapshot);
+  state.picked = null;
+  state.moved = false;
+  render();
+  setStatus("Board reset. Move exactly one stick to fix the equation.");
+});
+
+document.getElementById('hintBtn').addEventListener('click', () => {
+  const { move } = state.puzzle;
+  const [fi, fk] = move.from;
+  const [ti, tk] = move.to;
+  setStatus(`Hint: Move a stick from token ${fi+1} segment “${fk}” to token ${ti+1} segment “${tk}”.`);
+});
+
+document.getElementById('shareBtn').addEventListener('click', async () => {
+  const solved = checkSolved();
+  const puz = state.puzzle.id;
+  const text = `Sticky Math #${puz} — ${solved ? 'Solved ✅' : 'Not solved ❌'}\n` +
+               `Play: (your URL here)`;
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus("Share text copied to clipboard!", 'ok');
+  } catch {
+    setStatus("Couldn’t copy. Long-press to copy from the message:", 'bad');
+    alert(text);
+  }
+});
+
+/* ---------------------- INIT ---------------------- */
+
+document.getElementById('year').textContent = new Date().getFullYear();
+initPuzzle(PUZZLES[CURRENT_INDEX]);
+
+// (Optional) expose a simple API on window for swapping puzzles:
+window.StickyMath = {
+  load(id){
+    const idx = PUZZLES.findIndex(p => p.id === id);
+    if (idx >= 0){ CURRENT_INDEX = idx; initPuzzle(PUZZLES[idx]); }
+  },
+  add(p){ PUZZLES.push(p); },
+  list(){ return PUZZLES.map(p=>p.id); }
+};
+</script>
+
+<!-- BEGIN Puzzle Builder -->
+<div class="card" style="margin-top:20px">
+  <h2 style="margin:0 0 10px;font-size:18px">Puzzle Builder</h2>
+  <div style="margin-bottom:8px">
+    <label>Equation: 
+      <input id="builderEq" type="text" value="5+3=9" style="padding:4px 8px;width:120px">
+    </label>
+    <button id="builderLoad">Load</button>
+  </div>
+  <div id="builderBoard" class="board" style="background:#111;padding:12px;border-radius:10px"></div>
+  <div style="margin-top:8px;font-size:13px;color:var(--muted)">
+    Click one lit stick to mark <b>FROM</b>, then click an empty spot to mark <b>TO</b>.
+  </div>
+  <pre id="builderOut" style="background:#191a20;color:#eee;padding:8px;border-radius:8px;font-size:12px;margin-top:10px;white-space:pre-wrap"></pre>
+</div>
+
+<script>
+(function(){
+  let from=null, to=null;
+  const eqInput=document.getElementById('builderEq');
+  const out=document.getElementById('builderOut');
+  const board=document.getElementById('builderBoard');
+  const loadBtn=document.getElementById('builderLoad');
+
+  loadBtn.onclick=()=>{
+    renderBuilder(eqInput.value.trim());
+    from=null;to=null;out.textContent='';
+  };
+
+  function renderBuilder(str){
+    board.innerHTML='';
+    const tokens=str.split('').map(charToToken);
+    tokens.forEach((tok,idx)=>{
+      const tokenDiv=document.createElement('div');
+      tokenDiv.className='token'+(tok.kind!==TOKEN_KINDS.DIGIT?' ops':'');
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+      svg.setAttribute('viewBox','0 0 100 160');
+      tok.segs.forEach(seg=>{
+        const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+        r.setAttribute('x',seg.rect.x);
+        r.setAttribute('y',seg.rect.y);
+        r.setAttribute('width',seg.rect.w);
+        r.setAttribute('height',seg.rect.h);
+        r.setAttribute('rx',6);
+        r.setAttribute('ry',6);
+        r.classList.add('stick');
+        if(seg.on) r.classList.add('on');
+        r.dataset.token=idx;
+        r.dataset.key=seg.key;
+        r.addEventListener('click',()=>{
+          if(from===null && seg.on){
+            from=[idx,seg.key];
+            r.style.fill='var(--focus)';
+          } else if(from!==null && to===null && !seg.on){
+            to=[idx,seg.key];
+            r.style.fill='var(--accent)';
+            showOutput(str,from,to);
+          }
+        });
+        svg.appendChild(r);
+      });
+      tokenDiv.appendChild(svg);
+      board.appendChild(tokenDiv);
+    });
+  }
+
+  function showOutput(layout,from,to){
+    out.textContent=JSON.stringify({id:"NEW",layout,move:{from,to}},null,2);
+  }
+
+  // load initial
+  renderBuilder(eqInput.value.trim());
+})();
+</script>
+<!--END BUILDER TOOL-->
+</body>
+</html>
